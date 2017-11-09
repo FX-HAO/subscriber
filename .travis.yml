@@ -1,16 +1,23 @@
 language: go
-
 sudo: false
 dist: trusty
-
+env:
+  global:
+    - CC_TEST_REPORTER_ID=738188a0cd34e233a573637d5bcd3f643d248e898789d075900e827646e5de3a
 go:
   - 1.8.x
   - 1.9.x
   - master
-
 before_install:
   - go get github.com/streadway/amqp
   - go get github.com/sirupsen/logrus
-
 script:
-  - go test -v ./...
+  - go test -v -coverprofile=coverage.out ./...
+after_success:
+  - if [ "$TRAVIS_BRANCH" == "master" ] && [ "$TRAVIS_PULL_REQUEST" != "false" ]; then
+      curl -L https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64 > ./cc-test-reporter;
+      chmod +x ./cc-test-reporter;
+      ./cc-test-reporter before-build;
+      ./cc-test-reporter format-coverage --input-type gocov coverage.out;
+      ./cc-test-reporter upload-coverage;
+    fi
