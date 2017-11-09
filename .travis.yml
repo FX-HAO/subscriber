@@ -1,0 +1,16 @@
+language: go
+
+sudo: false
+dist: trusty
+
+go:
+  - 1.8.x
+  - 1.9.x
+  - master
+
+before_install:
+  - go get github.com/streadway/amqp
+  - go get github.com/sirupsen/logrus
+
+script:
+  - go test -v ./...

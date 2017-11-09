@@ -34,7 +34,7 @@ func TestAMQPSubscriber(t *testing.T) {
 	)
 	subMgr.Run()
 
-	time.Sleep(time.Second)
+	time.Sleep(3 * time.Second)
 	sub := subMgr.subs["TestAMQPSubscriber"].(*AMQPSubscriber)
 	conn, err := amqp.Dial(fmt.Sprintf("amqp://%s", sub.AMQP.URI))
 	if err != nil {
