@@ -90,14 +90,16 @@ func NewSubscriberManager(log logger) *SubscriberManager {
 func (sm *SubscriberManager) Run() {
 	for name, sub := range sm.subs {
 		go func(name string, sub Subscriber) {
-			sm.log.Infof(" [-] subscriber %s is going to initialize", name)
+			sm.log.Infof(" [-] Subscriber %s is going to initialize", name)
 			sub.Run()
 		}(name, sub)
 	}
 }
 
-// Drain notifies the subscribers stop accepting new messages.
-func (sm *SubscriberManager) Drain() {
+// GracefulStop stops the manager gracefully. It stops the subscribers from
+// accepting new messages and blocks until all the pending messages are
+// finished.
+func (sm *SubscriberManager) GracefulStop() {
 	for _, ep := range sm.subs {
 		ep.Close()
 	}
@@ -118,9 +120,9 @@ func (sm *SubscriberManager) Register(name string, setup *Setup) error {
 	default:
 		return errors.New("invalid protocol")
 	case Redis:
-		conn = newRedisSubscriber(ep, setup, sm.log)
+		conn = newRedisSubscriber(name, ep, setup, sm.log)
 	case AMQP:
-		conn = newAMQPSubscriber(ep, setup, sm.log)
+		conn = newAMQPSubscriber(name, ep, setup, sm.log)
 	}
 	sm.subs[name] = conn
 	return nil

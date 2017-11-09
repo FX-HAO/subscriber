@@ -8,7 +8,7 @@ import (
 
 type RedisSubscriber struct {
 	*Endpoint
-	log logger
+	log  logger
 	mu   sync.RWMutex
 	conn *redis.Conn
 	exec ActionFunc
@@ -16,7 +16,7 @@ type RedisSubscriber struct {
 	drain bool
 }
 
-func newRedisSubscriber(ep Endpoint, setup *Setup, logger logger) *RedisSubscriber {
+func newRedisSubscriber(name string, ep Endpoint, setup *Setup, logger logger) *RedisSubscriber {
 	return nil
 }
 

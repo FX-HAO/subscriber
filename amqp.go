@@ -1,9 +1,11 @@
 package subscriber
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/streadway/amqp"
@@ -12,30 +14,50 @@ import (
 // AMQPSubsriber represents a subscriber to receive messages from AMQP
 type AMQPSubscriber struct {
 	*Endpoint
-	log     logger
-	mu      sync.RWMutex
+	mu  sync.RWMutex
+	wg  *sync.WaitGroup
+	log logger
+
+	name    string
 	conn    *amqp.Connection
 	channel *amqp.Channel
 	exec    ActionFunc
 
-	drain bool
+	closed int32 // accessed atomically (non-zero means we're closed)
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func newAMQPSubscriber(ep Endpoint, setup *Setup, logger logger) *AMQPSubscriber {
+func newAMQPSubscriber(name string, ep Endpoint, setup *Setup, logger logger) *AMQPSubscriber {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &AMQPSubscriber{
+		name:     name,
 		Endpoint: &ep,
 		exec:     setup.ActionFunc,
 		log:      logger,
+		ctx:      ctx,
+		cancel:   cancel,
+		wg:       &sync.WaitGroup{},
 	}
 }
 
+func (sub *AMQPSubscriber) isClosed() bool {
+	return atomic.LoadInt32(&sub.closed) != 0
+}
+
 func (sub *AMQPSubscriber) Close() {
-	sub.mu.Lock()
-	defer sub.mu.Unlock()
-	if !sub.drain && sub.conn != nil {
-		sub.conn.Close()
-		sub.conn = nil
-		sub.channel = nil
+	if atomic.AddInt32(&sub.closed, 1) == 1 {
+		sub.cancel()
+
+		sub.mu.Lock()
+		if sub.conn != nil {
+			sub.conn = nil
+			sub.channel = nil
+		}
+		sub.mu.Unlock()
+
+		sub.wg.Wait()
+		sub.log.Infof(" [-] Subscriber %s is now safe to shutdown", sub.name)
 	}
 }
 
@@ -44,7 +66,8 @@ func (sub *AMQPSubscriber) Run() {
 
 	for {
 		sub.mu.Lock()
-		if sub.drain {
+		if sub.isClosed() {
+			sub.mu.Unlock()
 			return
 		}
 
@@ -106,15 +129,35 @@ func (sub *AMQPSubscriber) Run() {
 		if err != nil {
 			sub.log.Errorf("Failed to register a consumer: %v", err)
 		}
-		for delivery := range deliveries {
-			go func(delivery amqp.Delivery) {
-				args := []interface{}{delivery}
-				sub.exec(args...)
-			}(delivery)
+		terminated := make(chan bool, 1)
+		go func() {
+			for delivery := range deliveries {
+				sub.wg.Add(1)
+				go func(delivery amqp.Delivery) {
+					args := []interface{}{delivery}
+					sub.exec(args...)
+					sub.wg.Done()
+				}(delivery)
+			}
+			terminated <- true
+		}()
+
+		select {
+		case <-terminated:
+			break
+		case <-sub.ctx.Done():
+			sub.channel.Close()
+			return
 		}
 
-		sub.log.Errorf("Accept terminated, retring in %v", tempDelay)
+		sub.mu.Lock()
 		sub.conn = nil
-		time.Sleep(tempDelay)
+		sub.mu.Unlock()
+		sub.log.Errorf("Subscriber %s accepts terminated, retring in %v", sub.name, tempDelay)
+		select {
+		case <-time.After(tempDelay):
+		case <-sub.ctx.Done():
+			return
+		}
 	}
 }
