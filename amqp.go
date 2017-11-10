@@ -11,7 +11,7 @@ import (
 	"github.com/streadway/amqp"
 )
 
-// AMQPSubsriber represents a subscriber to receive messages from AMQP
+// AMQPSubscriber represents a subscriber, which consumes messages from AMQP
 type AMQPSubscriber struct {
 	*Endpoint
 	mu  sync.RWMutex
@@ -45,12 +45,14 @@ func (sub *AMQPSubscriber) isClosed() bool {
 	return atomic.LoadInt32(&sub.closed) != 0
 }
 
+// Close closes the subscriber gracefully, it blocks until all messages are finished
 func (sub *AMQPSubscriber) Close() {
 	if atomic.AddInt32(&sub.closed, 1) == 1 {
 		sub.cancel()
 
 		sub.mu.Lock()
 		if sub.conn != nil {
+			sub.conn.Close()
 			sub.conn = nil
 			sub.channel = nil
 		}
@@ -61,16 +63,16 @@ func (sub *AMQPSubscriber) Close() {
 	}
 }
 
+// Run starts the subscriber and blocks until the subscriber is closed
 func (sub *AMQPSubscriber) Run() {
 	tempDelay := 1 * time.Second // how long to sleep on accept failure
 
 	for {
-		sub.mu.Lock()
 		if sub.isClosed() {
-			sub.mu.Unlock()
 			return
 		}
 
+		sub.mu.Lock()
 		if sub.conn == nil {
 			conn, err := amqp.Dial(fmt.Sprintf("amqp://%s", sub.AMQP.URI))
 			if err != nil {
@@ -134,8 +136,7 @@ func (sub *AMQPSubscriber) Run() {
 			for delivery := range deliveries {
 				sub.wg.Add(1)
 				go func(delivery amqp.Delivery) {
-					args := []interface{}{delivery}
-					sub.exec(args...)
+					sub.exec(delivery)
 					sub.wg.Done()
 				}(delivery)
 			}

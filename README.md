@@ -16,22 +16,22 @@ import (
 logger := logrus.New()
 subMgr := NewSubscriberManager(logger)
 subMgr.Register(
-    "TestAMQPSubscriber1",
+    "TestAMQPSubscriber",
     &Setup{
-        Url:        "amqp://root:root@rabbitmq:5672/test.amqp.exchange1/test.amqp.queue1?route=#&ack=true&type=fanout",
+        URL: "amqp://root:root@rabbitmq:5672/test.amqp.exchange1/test.amqp.queue1?route=foo&route=bar&ack=false&type=direct",
         ActionFunc: func(args ...interface{}) {
-            // Handling the message
+            delivery := args[0].(amqp.Delivery)
+            delivery.Ack(false)
         },
     },
 )
 subMgr.Register(
-    "TestAMQPSubscriber2",
+    "TestRedisSubscriber",
     &Setup{
-        Url:        "amqp://root:root@rabbitmq:5672/test.amqp.exchange2/test.amqp.queue2?route=#&route=test2&ack=false&type=direct",
+        URL: "redis://:password@redis:6379/?channel=foo&channel=bar",
         ActionFunc: func(args ...interface{}) {
-            delivery := args[0].(amqp.Delivery)
-            delivery.Ack(false)
-            // Handling the message
+            message := args[0].(*redis.Message).Payload
+            fmt.Println(message)
         },
     },
 )
@@ -43,4 +43,4 @@ subMgr.GracefulStop()
 
 ## Roadmap
 - [x] Add support for AMQP
-- [ ] Add support for Redis
+- [x] Add support for Redis

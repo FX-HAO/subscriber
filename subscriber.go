@@ -2,10 +2,12 @@ package subscriber
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/go-redis/redis"
 )
 
 // EndpointProtocol is the type of protocol that the endpoint represents.
@@ -28,7 +30,7 @@ type ActionFunc func(args ...interface{})
 
 type Setup struct {
 	ActionFunc ActionFunc
-	Url        string
+	URL        string
 }
 
 type logger interface {
@@ -51,9 +53,9 @@ type Endpoint struct {
 	Protocol EndpointProtocol
 	Original string
 	Redis    struct {
-		Host    string
-		Port    int
-		Channel string
+		Addr     string
+		Password string
+		Channels []string
 	}
 	AMQP struct {
 		URI          string
@@ -90,7 +92,7 @@ func NewSubscriberManager(log logger) *SubscriberManager {
 func (sm *SubscriberManager) Run() {
 	for name, sub := range sm.subs {
 		go func(name string, sub Subscriber) {
-			sm.log.Infof(" [-] Subscriber %s is going to initialize", name)
+			sm.log.Infof(" [-] Subscriber %s is going to run", name)
 			sub.Run()
 		}(name, sub)
 	}
@@ -111,7 +113,7 @@ func (sm *SubscriberManager) Register(name string, setup *Setup) error {
 	if _, ok := sm.subs[name]; ok {
 		return errors.New("The subscriber %s has been registered before")
 	}
-	ep, error := parseEndpoint(setup.Url)
+	ep, error := parseEndpoint(setup.URL)
 	if error != nil {
 		return error
 	}
@@ -159,28 +161,31 @@ func parseEndpoint(s string) (Endpoint, error) {
 	}
 
 	if endpoint.Protocol == Redis {
-		dp := strings.Split(s, ":")
-		switch len(dp) {
-		default:
-			return endpoint, errors.New("invalid redis url")
-		case 1:
-			endpoint.Redis.Host = dp[0]
-			endpoint.Redis.Port = 6379
-		case 2:
-			endpoint.Redis.Host = dp[0]
-			n, err := strconv.ParseUint(dp[1], 10, 16)
+		opt, err := redis.ParseURL(fmt.Sprintf("redis://%s", s))
+		if err != nil {
+			return endpoint, errors.New("invalid Redis url")
+		}
+		endpoint.Redis.Addr = opt.Addr
+		endpoint.Redis.Password = opt.Password
+
+		if len(sqp[1]) > 1 {
+			m, err := url.ParseQuery(sqp[1])
 			if err != nil {
-				return endpoint, errors.New("invalid redis url port")
+				return endpoint, errors.New("invalid Redis url")
 			}
-			endpoint.Redis.Port = int(n)
+			for key, val := range m {
+				if len(val) == 0 {
+					continue
+				}
+				switch key {
+				case "channel":
+					endpoint.Redis.Channels = val
+				}
+			}
 		}
 
-		if len(sp) > 1 {
-			var err error
-			endpoint.Redis.Channel, err = url.QueryUnescape(sp[1])
-			if err != nil {
-				return endpoint, errors.New("invalid redis channel name")
-			}
+		if len(endpoint.Redis.Channels) < 1 {
+			return endpoint, errors.New("channel is missing in Redis url")
 		}
 	}
 
