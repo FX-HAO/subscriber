@@ -20,7 +20,7 @@ subMgr.Register(
     &Setup{
         Url:        "amqp://root:root@rabbitmq:5672/test.amqp.exchange1/test.amqp.queue1?route=#&ack=true&type=fanout",
         ActionFunc: func(args ...interface{}) {
-            # Handling the message
+            // Handling the message
         },
     },
 )
@@ -31,15 +31,14 @@ subMgr.Register(
         ActionFunc: func(args ...interface{}) {
             delivery := args[0].(amqp.Delivery)
             delivery.Ack(false)
-            # Handling the message
+            // Handling the message
         },
     },
 )
-...
 subMgr.Run()
 
-// Graceful shutdown
-subMgr.Drain()
+// Stop the subscribers
+subMgr.GracefulStop()
 ```
 
 ## Roadmap
