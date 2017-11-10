@@ -18,6 +18,35 @@ func mockSubscriberManager() *SubscriberManager {
 	return NewSubscriberManager(mockLogger())
 }
 
+func ExampleSubscriberManager() {
+	logger := logrus.New()
+	subMgr := NewSubscriberManager(logger)
+	subMgr.Register(
+		"TestAMQPSubscriber1",
+		&Setup{
+			Url: "amqp://root:root@rabbitmq:5672/test.amqp.exchange1/test.amqp.queue1?route=#&ack=true&type=fanout",
+			ActionFunc: func(args ...interface{}) {
+				// Handling the message
+			},
+		},
+	)
+	subMgr.Register(
+		"TestAMQPSubscriber2",
+		&Setup{
+			Url: "amqp://root:root@rabbitmq:5672/test.amqp.exchange2/test.amqp.queue2?route=#&route=test2&ack=false&type=direct",
+			ActionFunc: func(args ...interface{}) {
+				delivery := args[0].(amqp.Delivery)
+				delivery.Ack(false)
+				// Handling the message
+			},
+		},
+	)
+	subMgr.Run()
+
+	// Stop the subscribers
+	subMgr.GracefulStop()
+}
+
 func TestAMQPSubscriber(t *testing.T) {
 	amqpAddr := os.Getenv("AMQP_ADDR")
 	if amqpAddr == "" {
