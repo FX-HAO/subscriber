@@ -79,6 +79,9 @@ func (sub *AMQPSubscriber) Run() {
 				sub.log.Fatalf("Failed to connect to RabbitMQ, %v", err)
 			}
 			sub.conn = conn
+			go func() {
+				sub.log.Warnf("Subsciber %s's connection closing: %s", sub.name, <-sub.conn.NotifyClose(make(chan *amqp.Error)))
+			}()
 			channel, err := conn.Channel()
 			if err != nil {
 				sub.log.Fatalf("Failed to open a channel, %v", err)
