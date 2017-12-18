@@ -11,6 +11,8 @@ import (
 	"github.com/streadway/amqp"
 )
 
+var reconnInterval = 3 * time.Second
+
 // AMQPSubscriber represents a subscriber, which consumes messages from AMQP
 type AMQPSubscriber struct {
 	*Endpoint
@@ -45,7 +47,7 @@ func (sub *AMQPSubscriber) isClosed() bool {
 	return atomic.LoadInt32(&sub.closed) != 0
 }
 
-// Close closes the subscriber gracefully, it blocks until all messages are finished
+// Close closes the subscriber gracefully, it blocks until all messages are handled
 func (sub *AMQPSubscriber) Close() {
 	if atomic.AddInt32(&sub.closed, 1) == 1 {
 		sub.cancel()
@@ -63,76 +65,123 @@ func (sub *AMQPSubscriber) Close() {
 	}
 }
 
+func (sub *AMQPSubscriber) connect() error {
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	conn, err := amqp.Dial(fmt.Sprintf("amqp://%s", sub.AMQP.URI))
+	if err != nil {
+		sub.log.Fatalf("Failed to connect to RabbitMQ, %v", err)
+	}
+	sub.conn = conn
+	go func() {
+		err := <-conn.NotifyClose(make(chan *amqp.Error))
+		sub.log.Errorf("Subscriber %s's connection closed: %s", sub.name, err)
+		sub.reconnect()
+	}()
+
+	channel, err := conn.Channel()
+	if err != nil {
+		sub.log.Fatalf("Failed to open a channel, %v", err)
+	}
+	sub.channel = channel
+
+	// Declare new exchange
+	if err := channel.ExchangeDeclare(
+		sub.AMQP.ExchangeName,
+		sub.AMQP.Type,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		sub.log.Warnf("exchange.declare: %v", err)
+
+		// Reopen a channel because of `ExchangeDeclare` will close the channel when errors returned
+		channel, err = conn.Channel()
+		if err != nil {
+			log.Fatalf("Failed to open a channel, %v", err)
+		}
+		sub.channel = channel
+	}
+
+	// Declare queue and make binding
+	if _, err := channel.QueueDeclare(sub.AMQP.QueueName, true, false, false, false, nil); err != nil {
+		sub.log.Fatalf("queue.declare: %v", err)
+	}
+	if sub.AMQP.ExchangeName != "" {
+		for i := range sub.AMQP.RouteKey {
+			if err := channel.QueueBind(sub.AMQP.QueueName, sub.AMQP.RouteKey[i], sub.AMQP.ExchangeName, false, nil); err != nil {
+				sub.log.Fatalf("queue.bind: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (sub *AMQPSubscriber) getConn() *amqp.Connection {
+	sub.mu.RLock()
+	defer sub.mu.RUnlock()
+	return sub.conn
+}
+
+func (sub *AMQPSubscriber) reconnect() {
+	if conn := sub.getConn(); conn != nil {
+		if err := conn.Close(); err != nil {
+			sub.log.Errorf("Subscriber %s failed to close connection: %s", sub.name, err)
+		}
+	}
+
+	if sub.isClosed() {
+		return
+	}
+
+	time.Sleep(reconnInterval)
+
+	if err := sub.connect(); err != nil {
+		log.Fatalf("Failed to reconnect: %v", err)
+	}
+	sub.log.Infof("Subscirber %s reconnect successfully", sub.name)
+}
+
+func (sub *AMQPSubscriber) consume() (<-chan amqp.Delivery, error) {
+	sub.mu.RLock()
+	ch := sub.channel
+	sub.mu.RUnlock()
+
+	return ch.Consume(
+		sub.AMQP.QueueName, // queue
+		"",                 // consumer
+		sub.AMQP.Ack,       // auto-ack
+		false,              // exclusive
+		false,              // no-local
+		false,              // no-wait
+		nil,                // args
+	)
+}
+
 // Run starts the subscriber and blocks until the subscriber is closed
 func (sub *AMQPSubscriber) Run() {
-	tempDelay := 1 * time.Second // how long to sleep on accept failure
+	// tempDelay := 10 * time.Second // how long to sleep on accept failure
+
+	if conn := sub.getConn(); conn == nil {
+		sub.connect()
+	}
 
 	for {
 		if sub.isClosed() {
 			return
 		}
 
-		sub.mu.Lock()
-		if sub.conn == nil {
-			conn, err := amqp.Dial(fmt.Sprintf("amqp://%s", sub.AMQP.URI))
-			if err != nil {
-				sub.log.Fatalf("Failed to connect to RabbitMQ, %v", err)
-			}
-			sub.conn = conn
-			go func() {
-				sub.log.Warnf("Subsciber %s's connection closing: %s", sub.name, <-sub.conn.NotifyClose(make(chan *amqp.Error)))
-			}()
-			channel, err := conn.Channel()
-			if err != nil {
-				sub.log.Fatalf("Failed to open a channel, %v", err)
-			}
-			sub.channel = channel
-
-			// Declare new exchange
-			if err := channel.ExchangeDeclare(
-				sub.AMQP.ExchangeName,
-				sub.AMQP.Type,
-				true,
-				false,
-				false,
-				false,
-				nil,
-			); err != nil {
-				sub.log.Warnf("exchange.declare: %v", err)
-
-				// Reopen a channel because of `ExchangeDeclare` will close the channel when errors returned
-				channel, err = conn.Channel()
-				if err != nil {
-					log.Fatalf("Failed to open a channel, %v", err)
-				}
-				sub.channel = channel
-			}
-
-			// Declare queue and make binding
-			if _, err := channel.QueueDeclare(sub.AMQP.QueueName, true, false, false, false, nil); err != nil {
-				sub.log.Fatalf("queue.declare: %v", err)
-			}
-			if sub.AMQP.ExchangeName != "" {
-				for i := range sub.AMQP.RouteKey {
-					if err := channel.QueueBind(sub.AMQP.QueueName, sub.AMQP.RouteKey[i], sub.AMQP.ExchangeName, false, nil); err != nil {
-						sub.log.Fatalf("queue.bind: %v", err)
-					}
-				}
-			}
-		}
-		sub.mu.Unlock()
-
-		deliveries, err := sub.channel.Consume(
-			sub.AMQP.QueueName, // queue
-			"",                 // consumer
-			sub.AMQP.Ack,       // auto-ack
-			false,              // exclusive
-			false,              // no-local
-			false,              // no-wait
-			nil,                // args
-		)
+		deliveries, err := sub.consume()
 		if err != nil {
 			sub.log.Errorf("Failed to register a consumer: %v", err)
+			select {
+			case <-time.After(reconnInterval):
+			case <-sub.ctx.Done():
+				return
+			}
+			continue
 		}
 		terminated := make(chan bool, 1)
 		go func() {
@@ -154,14 +203,11 @@ func (sub *AMQPSubscriber) Run() {
 			return
 		}
 
-		sub.mu.Lock()
-		sub.conn = nil
-		sub.mu.Unlock()
-		sub.log.Errorf("Subscriber %s accepts terminated, retring in %v", sub.name, tempDelay)
-		select {
-		case <-time.After(tempDelay):
-		case <-sub.ctx.Done():
-			return
-		}
+		// sub.log.Errorf("Subscriber %s accepts terminated, retring in %v", sub.name, tempDelay)
+		// select {
+		// case <-time.After(tempDelay):
+		// case <-sub.ctx.Done():
+		// 	return
+		// }
 	}
 }
