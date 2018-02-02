@@ -2,6 +2,7 @@
 
 [![GoDoc](https://godoc.org/github.com/FX-HAO/subscriber?status.svg)](http://godoc.org/github.com/FX-HAO/subscriber)
 [![Build Status](https://travis-ci.org/FX-HAO/subscriber.svg?branch=master)](https://travis-ci.org/FX-HAO/subscriber)
+[![Go Report Card](https://goreportcard.com/badge/github.com/FX-HAO/subscriber)](https://goreportcard.com/report/github.com/FX-HAO/subscriber)
 [![Test Coverage](https://api.codeclimate.com/v1/badges/d56ab630a64c030488c4/test_coverage)](https://codeclimate.com/github/FX-HAO/subscriber/test_coverage)
 
 Subscriber is a simple implementation of the subscribers in Pub/Sub pattern. It's easy to use and provide you most of the basic functionality you need.
