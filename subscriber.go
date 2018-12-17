@@ -63,6 +63,7 @@ type Endpoint struct {
 		QueueName    string
 		RouteKey     []string
 		Ack          bool
+		Exclusive    bool
 		Type         string
 	}
 }
@@ -200,10 +201,12 @@ func parseEndpoint(s string) (Endpoint, error) {
 	// Routing-Key - ''
 	// Auto-Ack - false
 	// Type - direct
+	// Exclusive - false
 	//
-	// - "route" - [string] routing key
-	// - "ack"   - [bool] auto ack
-	// - "type"  - [string] queue type
+	// - "route" 	 - [string] routing key
+	// - "ack"   	 - [bool] auto ack
+	// - "type"  	 - [string] queue type
+	// - "exclusive" - [bool] used by only one connection and the queue will be deleted when that connection closes
 	//
 	if endpoint.Protocol == AMQP {
 		// Bind connection information
@@ -242,6 +245,12 @@ func parseEndpoint(s string) (Endpoint, error) {
 						endpoint.AMQP.Ack = false
 					} else {
 						endpoint.AMQP.Ack = true
+					}
+				case "exclusive":
+					if val[0] == "false" {
+						endpoint.AMQP.Exclusive = false
+					} else {
+						endpoint.AMQP.Exclusive = true
 					}
 				case "type":
 					if val[0] == "fanout" {

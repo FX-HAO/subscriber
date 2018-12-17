@@ -106,7 +106,7 @@ func (sub *AMQPSubscriber) connect() error {
 	}
 
 	// Declare queue and make binding
-	if _, err := channel.QueueDeclare(sub.AMQP.QueueName, true, false, false, false, nil); err != nil {
+	if _, err := channel.QueueDeclare(sub.AMQP.QueueName, true, false, sub.AMQP.Exclusive, false, nil); err != nil {
 		sub.log.Fatalf("queue.declare: %v", err)
 	}
 	if sub.AMQP.ExchangeName != "" {
@@ -153,7 +153,7 @@ func (sub *AMQPSubscriber) consume() (<-chan amqp.Delivery, error) {
 		sub.AMQP.QueueName, // queue
 		"",                 // consumer
 		sub.AMQP.Ack,       // auto-ack
-		false,              // exclusive
+		sub.AMQP.Exclusive, // exclusive
 		false,              // no-local
 		false,              // no-wait
 		nil,                // args

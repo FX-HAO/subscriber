@@ -139,7 +139,7 @@ func TestRedisSubscriber(t *testing.T) {
 }
 
 func TestParseAMQPEndpoint(t *testing.T) {
-	amqpURL := "amqp://guest:guest@rabbitmq:5672/test.amqp.exchange/test.amqp.queue?route=#&ack=true&type=fanout"
+	amqpURL := "amqp://guest:guest@rabbitmq:5672/test.amqp.exchange/test.amqp.queue?route=#&ack=true&type=fanout&exclusive=true"
 	ep, err := parseEndpoint(amqpURL)
 	if err != nil {
 		t.Errorf("Fail to parse amqpURL, got: %v, want: %v", err, nil)
@@ -164,6 +164,9 @@ func TestParseAMQPEndpoint(t *testing.T) {
 	}
 	if ep.AMQP.Type != "fanout" {
 		t.Errorf("Fail to parse Type, got: %v, want: %v", ep.AMQP.Type, "fanout")
+	}
+	if ep.AMQP.Exclusive != true {
+		t.Errorf("Fail to parse Exclusive, got: %v, want: %v", ep.AMQP.Exclusive, true)
 	}
 }
 
