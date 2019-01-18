@@ -73,17 +73,22 @@ func (sub *AMQPSubscriber) connect() error {
 		sub.log.Fatalf("Failed to connect to RabbitMQ, %v", err)
 	}
 	sub.conn = conn
-	go func() {
-		err := <-conn.NotifyClose(make(chan *amqp.Error))
-		sub.log.Errorf("Subscriber %s's connection closed: %s", sub.name, err)
-		sub.reconnect()
-	}()
 
 	channel, err := conn.Channel()
 	if err != nil {
 		sub.log.Fatalf("Failed to open a channel, %v", err)
 	}
 	sub.channel = channel
+
+	go func() {
+		var err *amqp.Error
+		select {
+		case err = <-conn.NotifyClose(make(chan *amqp.Error)):
+		case err = <-channel.NotifyClose(make(chan *amqp.Error)):
+		}
+		sub.log.Errorf("Subscriber %s's channel/connection closed: %s", sub.name, err)
+		sub.reconnect()
+	}()
 
 	// Declare new exchange
 	if err := channel.ExchangeDeclare(
@@ -141,7 +146,7 @@ func (sub *AMQPSubscriber) reconnect() {
 	if err := sub.connect(); err != nil {
 		log.Fatalf("Failed to reconnect: %v", err)
 	}
-	sub.log.Infof("Subscirber %s reconnect successfully", sub.name)
+	sub.log.Infof("Subscriber %s reconnect successfully", sub.name)
 }
 
 func (sub *AMQPSubscriber) consume() (<-chan amqp.Delivery, error) {
@@ -176,6 +181,7 @@ func (sub *AMQPSubscriber) Run() {
 		deliveries, err := sub.consume()
 		if err != nil {
 			sub.log.Errorf("Failed to register a consumer: %v", err)
+
 			select {
 			case <-time.After(reconnInterval):
 			case <-sub.ctx.Done():
@@ -183,7 +189,7 @@ func (sub *AMQPSubscriber) Run() {
 			}
 			continue
 		}
-		terminated := make(chan bool, 1)
+		terminated := make(chan struct{}, 1)
 		go func() {
 			for delivery := range deliveries {
 				sub.wg.Add(1)
@@ -192,7 +198,7 @@ func (sub *AMQPSubscriber) Run() {
 					sub.wg.Done()
 				}(delivery)
 			}
-			terminated <- true
+			terminated <- struct{}{}
 		}()
 
 		select {
@@ -202,12 +208,5 @@ func (sub *AMQPSubscriber) Run() {
 			sub.channel.Close()
 			return
 		}
-
-		// sub.log.Errorf("Subscriber %s accepts terminated, retring in %v", sub.name, tempDelay)
-		// select {
-		// case <-time.After(tempDelay):
-		// case <-sub.ctx.Done():
-		// 	return
-		// }
 	}
 }
