@@ -80,16 +80,6 @@ func (sub *AMQPSubscriber) connect() error {
 	}
 	sub.channel = channel
 
-	go func() {
-		var err *amqp.Error
-		select {
-		case err = <-conn.NotifyClose(make(chan *amqp.Error)):
-		case err = <-channel.NotifyClose(make(chan *amqp.Error)):
-		}
-		sub.log.Errorf("Subscriber %s's channel/connection closed: %s", sub.name, err)
-		sub.reconnect()
-	}()
-
 	// Declare new exchange
 	if err := channel.ExchangeDeclare(
 		sub.AMQP.ExchangeName,
@@ -130,6 +120,12 @@ func (sub *AMQPSubscriber) getConn() *amqp.Connection {
 	return sub.conn
 }
 
+func (sub *AMQPSubscriber) getChannel() *amqp.Channel {
+	sub.mu.RLock()
+	defer sub.mu.RUnlock()
+	return sub.channel
+}
+
 func (sub *AMQPSubscriber) reconnect() {
 	if conn := sub.getConn(); conn != nil {
 		if err := conn.Close(); err != nil {
@@ -141,8 +137,6 @@ func (sub *AMQPSubscriber) reconnect() {
 		return
 	}
 
-	time.Sleep(reconnInterval)
-
 	if err := sub.connect(); err != nil {
 		log.Fatalf("Failed to reconnect: %v", err)
 	}
@@ -150,9 +144,10 @@ func (sub *AMQPSubscriber) reconnect() {
 }
 
 func (sub *AMQPSubscriber) consume() (<-chan amqp.Delivery, error) {
-	sub.mu.RLock()
-	ch := sub.channel
-	sub.mu.RUnlock()
+	ch := sub.getChannel()
+	if ch == nil {
+		return nil, fmt.Errorf("Subscriber %v consumes an empty channel", sub.name)
+	}
 
 	return ch.Consume(
 		sub.AMQP.QueueName, // queue
@@ -167,8 +162,6 @@ func (sub *AMQPSubscriber) consume() (<-chan amqp.Delivery, error) {
 
 // Run starts the subscriber and blocks until the subscriber is closed
 func (sub *AMQPSubscriber) Run() {
-	// tempDelay := 10 * time.Second // how long to sleep on accept failure
-
 	if conn := sub.getConn(); conn == nil {
 		sub.connect()
 	}
@@ -189,7 +182,7 @@ func (sub *AMQPSubscriber) Run() {
 			}
 			continue
 		}
-		terminated := make(chan struct{}, 1)
+
 		go func() {
 			for delivery := range deliveries {
 				sub.wg.Add(1)
@@ -198,11 +191,23 @@ func (sub *AMQPSubscriber) Run() {
 					sub.wg.Done()
 				}(delivery)
 			}
+		}()
+
+		terminated := make(chan struct{}, 1)
+		go func() {
+			var err *amqp.Error
+			select {
+			case err = <-sub.getConn().NotifyClose(make(chan *amqp.Error)):
+			case err = <-sub.getChannel().NotifyClose(make(chan *amqp.Error)):
+			}
+			sub.log.Errorf("Subscriber %s's channel/connection closed: %s", sub.name, err)
 			terminated <- struct{}{}
 		}()
 
 		select {
 		case <-terminated:
+			time.Sleep(reconnInterval)
+			sub.reconnect()
 			break
 		case <-sub.ctx.Done():
 			sub.channel.Close()
